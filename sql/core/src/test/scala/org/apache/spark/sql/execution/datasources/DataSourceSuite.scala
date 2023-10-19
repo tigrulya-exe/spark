@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.execution.datasources
 
+import java.net.URI
+
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, Path, RawLocalFileSystem}
 import org.scalatest.PrivateMethodTester
@@ -25,6 +27,7 @@ import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.test.SharedSparkSession
 
 class DataSourceSuite extends SharedSparkSession with PrivateMethodTester {
+
   import TestPaths._
 
   test("test glob and non glob paths") {
@@ -152,6 +155,39 @@ class DataSourceSuite extends SharedSparkSession with PrivateMethodTester {
     val expectMessage = "No FileSystem for scheme nonexistentFs"
     assert(message.filterNot(Set(':', '"').contains) == expectMessage)
   }
+
+  test("SPARK-39910: test Hadoop archive non glob paths") {
+    val absoluteHarPaths = buildFullHarPaths(allRelativeHarPaths)
+
+    val resultPaths = DataSource.checkAndGlobPathIfNecessary(
+      absoluteHarPaths.map(_.toString),
+      hadoopConf,
+      checkEmptyGlobPath = true,
+      checkFilesExist = true,
+      enableGlobbing = true
+    )
+
+    assert(
+      resultPaths.toSet === absoluteHarPaths.toSet
+    )
+  }
+
+  test("SPARK-39910: test Hadoop archive glob paths") {
+    val harGlobePaths = buildFullHarPaths(Seq(globeRelativeHarPath))
+
+    val resultPaths = DataSource.checkAndGlobPathIfNecessary(
+      harGlobePaths.map(_.toString),
+      hadoopConf,
+      checkEmptyGlobPath = true,
+      checkFilesExist = true,
+      enableGlobbing = true
+    )
+
+    val expectedHarPaths = buildFullHarPaths(allRelativeHarPaths)
+    assert(
+      resultPaths.toSet === expectedHarPaths.toSet
+    )
+  }
 }
 
 object TestPaths {
@@ -193,10 +229,34 @@ object TestPaths {
       )
   )
 
+  val txtRelativeHarPath = new Path("/test.txt")
+  val csvRelativeHarPath = new Path("/test.csv")
+  val jsonRelativeHarPath = new Path("/test.json")
+  val parquetRelativeHarPath = new Path("/test.parquet")
+  val orcRelativeHarPath = new Path("/test.orc")
+  val globeRelativeHarPath = new Path("/test.*")
+
+  val allRelativeHarPaths = Seq(
+    txtRelativeHarPath,
+    csvRelativeHarPath,
+    jsonRelativeHarPath,
+    parquetRelativeHarPath,
+    orcRelativeHarPath
+  )
+
   def createMockFileStatus(path: String): FileStatus = {
     val fileStatus = new FileStatus()
     fileStatus.setPath(new Path(path))
     fileStatus
+  }
+
+  def buildFullHarPaths(relativePaths: Seq[Path]): Seq[Path] = {
+    val archiveUrl = Thread.currentThread().getContextClassLoader
+      .getResource("test-data/test-archive.har")
+      .getPath
+
+    val archivePath = new Path("har", "file-:", archiveUrl)
+    relativePaths.map(Path.mergePaths(archivePath, _))
   }
 }
 
@@ -210,4 +270,6 @@ class MockFileSystem extends RawLocalFileSystem {
   override def globStatus(pathPattern: Path): Array[FileStatus] = {
     mockGlobResults.getOrElse(pathPattern, Array())
   }
+
+  override def getUri: URI = URI.create("mockFs://mockFs/")
 }
